@@ -1,56 +1,84 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql" url = env("DATABASE_URL") }
-enum Role { CUSTOMER ADMIN }
-enum PaymentStatus { CREATED PAID FAILED REFUNDED }
-enum JobStatus { PENDING PROVISIONING RUNNING STOPPING STOPPED FAILED }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+enum PaymentStatus {
+  CREATED
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum JobStatus {
+  PENDING
+  PROVISIONING
+  RUNNING
+  STOPPING
+  STOPPED
+  FAILED
+}
+
 model User {
- id String @id @default(cuid())
- email String @unique
- passwordHash String
- name String
- role Role @default(CUSTOMER)
- balanceUsd Decimal @default(0) @db.Decimal(14,4)
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
- payments Payment[]
- jobs Job[]
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         Role      @default(CUSTOMER)
+  balanceUsd   Decimal   @default(0) @db.Decimal(14,4)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  payments     Payment[]
+  jobs         Job[]
 }
+
 model GpuProduct {
- id String @id @default(cuid())
- slug String @unique
- name String
- providerSku String?
- memoryGb Int
- priceUsdPerHour Decimal @db.Decimal(12,6)
- active Boolean @default(true)
- createdAt DateTime @default(now())
- jobs Job[]
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  providerSku     String?
+  memoryGb        Int
+  priceUsdPerHour Decimal  @db.Decimal(12,6)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  jobs            Job[]
 }
+
 model Payment {
- id String @id @default(cuid())
- userId String
- user User @relation(fields:[userId], references:[id])
- amountUsd Decimal @db.Decimal(14,4)
- amountInr Int?
- razorpayOrderId String? @unique
- razorpayPaymentId String? @unique
- status PaymentStatus @default(CREATED)
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation(fields: [userId], references: [id])
+  amountUsd         Decimal       @db.Decimal(14,4)
+  amountInr         Int?
+  razorpayOrderId   String?       @unique
+  razorpayPaymentId String?       @unique
+  status            PaymentStatus @default(CREATED)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 }
+
 model Job {
- id String @id @default(cuid())
- userId String
- gpuProductId String
- user User @relation(fields:[userId], references:[id])
- gpuProduct GpuProduct @relation(fields:[gpuProductId], references:[id])
- provider String @default("runpod")
- providerJobId String?
- status JobStatus @default(PENDING)
- requestedHours Decimal @db.Decimal(10,2)
- startedAt DateTime?
- stoppedAt DateTime?
- estimatedCostUsd Decimal @db.Decimal(14,4)
- createdAt DateTime @default(now())
- updatedAt DateTime @updatedAt
+  id              String    @id @default(cuid())
+  userId          String
+  gpuProductId    String
+  user            User     @relation(fields: [userId], references: [id])
+  gpuProduct      GpuProduct @relation(fields: [gpuProductId], references: [id])
+  provider        String    @default("runpod")
+  providerJobId   String?
+  status          JobStatus @default(PENDING)
+  requestedHours  Decimal   @db.Decimal(10,2)
+  startedAt       DateTime?
+  stoppedAt       DateTime?
+  estimatedCostUsd Decimal  @db.Decimal(14,4)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }
