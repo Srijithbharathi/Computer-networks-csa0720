@@ -1,0 +1,5 @@
+.env
+node_modules
+.prisma
+npm-debug.log
+.DS_Store
