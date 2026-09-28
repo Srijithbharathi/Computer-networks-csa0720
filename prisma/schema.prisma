@@ -28,17 +28,25 @@ enum JobStatus {
   FAILED
 }
 
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+  REFUND
+  ADJUSTMENT
+}
+
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
+  id           String              @id @default(cuid())
+  email        String              @unique
   passwordHash String
   name         String
-  role         Role      @default(CUSTOMER)
-  balanceUsd   Decimal   @default(0) @db.Decimal(14,4)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  role         Role                @default(CUSTOMER)
+  balanceUsd   Decimal             @default(0) @db.Decimal(14,4)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
   payments     Payment[]
   jobs         Job[]
+  transactions WalletTransaction[]
 }
 
 model GpuProduct {
@@ -54,31 +62,48 @@ model GpuProduct {
 }
 
 model Payment {
-  id                String        @id @default(cuid())
+  id                String               @id @default(cuid())
   userId            String
-  user              User          @relation(fields: [userId], references: [id])
-  amountUsd         Decimal       @db.Decimal(14,4)
+  user              User                 @relation(fields: [userId], references: [id])
+  amountUsd         Decimal              @db.Decimal(14,4)
   amountInr         Int?
-  razorpayOrderId   String?       @unique
-  razorpayPaymentId String?       @unique
-  status            PaymentStatus @default(CREATED)
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  razorpayOrderId   String?              @unique
+  razorpayPaymentId String?              @unique
+  status            PaymentStatus        @default(CREATED)
+  transaction       WalletTransaction?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 }
 
 model Job {
-  id              String    @id @default(cuid())
-  userId          String
-  gpuProductId    String
-  user            User     @relation(fields: [userId], references: [id])
-  gpuProduct      GpuProduct @relation(fields: [gpuProductId], references: [id])
-  provider        String    @default("runpod")
-  providerJobId   String?
-  status          JobStatus @default(PENDING)
-  requestedHours  Decimal   @db.Decimal(10,2)
-  startedAt       DateTime?
-  stoppedAt       DateTime?
-  estimatedCostUsd Decimal  @db.Decimal(14,4)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                String              @id @default(cuid())
+  userId            String
+  gpuProductId      String
+  user              User                @relation(fields: [userId], references: [id])
+  gpuProduct        GpuProduct          @relation(fields: [gpuProductId], references: [id])
+  provider          String              @default("runpod")
+  providerJobId     String?
+  status            JobStatus           @default(PENDING)
+  requestedHours    Decimal             @db.Decimal(10,2)
+  startedAt         DateTime?
+  stoppedAt         DateTime?
+  estimatedCostUsd  Decimal             @db.Decimal(14,4)
+  transaction       WalletTransaction?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+}
+
+model WalletTransaction {
+  id           String                 @id @default(cuid())
+  userId       String
+  paymentId    String?                @unique
+  jobId        String?                @unique
+  type         WalletTransactionType
+  amountUsd    Decimal                @db.Decimal(14,4)
+  balanceAfter Decimal                @db.Decimal(14,4)
+  reference    String                 @unique
+  user         User                   @relation(fields: [userId], references: [id])
+  payment      Payment?               @relation(fields: [paymentId], references: [id])
+  job          Job?                   @relation(fields: [jobId], references: [id])
+  createdAt    DateTime               @default(now())
 }
