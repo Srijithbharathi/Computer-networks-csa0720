@@ -2,7 +2,7 @@ require("dotenv").config();
 const express=require("express"),cors=require("cors"),helmet=require("helmet"),crypto=require("crypto"),bcrypt=require("bcryptjs"),jwt=require("jsonwebtoken"),Razorpay=require("razorpay"),{z}=require("zod"),{PrismaClient}=require("@prisma/client"),path=require("path");
 const app=express(),prisma=new PrismaClient();
 app.set("trust proxy",1);
-app.use(helmet({crossOriginResourcePolicy:false}));
+app.use(helmet({crossOriginResourcePolicy:false,contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'","'unsafe-inline'","https://checkout.razorpay.com"],connectSrc:["'self'","https://api.razorpay.com"],frameSrc:["'self'","https://api.razorpay.com","https://checkout.razorpay.com"],imgSrc:["'self'","data:","https:"],styleSrc:["'self'","'unsafe-inline'"]}}}));
 app.use(cors({origin:process.env.APP_URL||true,credentials:true}));
 
 function safeEqual(a,b){const x=Buffer.from(a||""),y=Buffer.from(b||"");return x.length===y.length&&crypto.timingSafeEqual(x,y)}
