@@ -70,7 +70,7 @@ model Payment {
   razorpayOrderId   String?              @unique
   razorpayPaymentId String?              @unique
   status            PaymentStatus        @default(CREATED)
-  transaction       WalletTransaction?
+  transactions      WalletTransaction[]
   createdAt         DateTime             @default(now())
   updatedAt         DateTime             @updatedAt
 }
@@ -97,7 +97,7 @@ model WalletTransaction {
   id           String                 @id @default(cuid())
   userId       String
   paymentId    String?                @unique
-  jobId        String?                @unique
+  jobId        String?
   type         WalletTransactionType
   amountUsd    Decimal                @db.Decimal(14,4)
   balanceAfter Decimal                @db.Decimal(14,4)
