@@ -36,7 +36,7 @@ async function refundJob(jobId,reason){
 }
 async function runpod(query,variables){
   requireEnv("RUNPOD_API_KEY");
-  const r=await fetch(process.env.RUNPOD_GRAPHQL_URL||"https://api.runpod.io/graphql",{method:"POST",headers:{"content-type":"application/json","authorization:"Bearer "+process.env.RUNPOD_API_KEY},body:JSON.stringify({query,variables})});
+  const r=await fetch(process.env.RUNPOD_GRAPHQL_URL||"https://api.runpod.io/graphql",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+process.env.RUNPOD_API_KEY},body:JSON.stringify({query,variables})});
   const d=await r.json().catch(()=>({}));
   if(!r.ok||d.errors?.length)throw new Error(d.errors?.[0]?.message||"RunPod API request failed");
   return d.data;
