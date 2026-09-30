@@ -201,3 +201,5 @@ app.get("/api/admin/summary",auth,admin,async(_,res)=>{const [users,jobs,payment
 
 app.get(/.*/,(_,res)=>res.sendFile(path.join(process.cwd(),"public","index.html")));
 const port=Number(process.env.PORT||8080);app.listen(port,()=>console.log("AI Compute Cloud listening on "+port));
+
+// Deployment sync check
