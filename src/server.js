@@ -149,7 +149,8 @@ app.post("/api/jobs",auth,async(req,res)=>{
       const updated=await prisma.job.update({where:{id:job.id},data:{providerJobId:pod.id,status:pod.desiredStatus==="RUNNING"?"RUNNING":"PROVISIONING",startedAt:pod.desiredStatus==="RUNNING"?new Date():null}});
       return res.status(201).json({job:updated,provider:{id:pod.id,name:pod.name,status:pod.desiredStatus}});
     }catch(e){
-      await refundJob(job.id,e.message);
+      console.error("[RUNPOD_PROVISION_FAILED]", JSON.stringify({jobId:job.id,gpu:gpu.name,message:e?.message||String(e),stack:e?.stack||null}));
+      try{await refundJob(job.id,e.message);}catch(refundError){console.error("[RUNPOD_REFUND_FAILED]", JSON.stringify({jobId:job.id,message:refundError?.message||String(refundError)}));}
       return res.status(502).json({error:"GPU provisioning failed; your reserved wallet balance was restored."});
     }
   }catch(e){
