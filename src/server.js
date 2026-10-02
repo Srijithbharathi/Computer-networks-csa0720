@@ -36,10 +36,20 @@ async function refundJob(jobId,reason){
 }
 async function runpod(query,variables){
   requireEnv("RUNPOD_API_KEY");
-  const r=await fetch(process.env.RUNPOD_GRAPHQL_URL||"https://api.runpod.io/graphql",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+process.env.RUNPOD_API_KEY},body:JSON.stringify({query,variables})});
-  const d=await r.json().catch(()=>({}));
-  if(!r.ok||d.errors?.length)throw new Error(d.errors?.[0]?.message||"RunPod API request failed");
-  return d.data;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),Number(process.env.RUNPOD_API_TIMEOUT_MS||25000));
+  try{
+    const r=await fetch(process.env.RUNPOD_GRAPHQL_URL||"https://api.runpod.io/graphql",{method:"POST",headers:{"content-type":"application/json","authorization":"Bearer "+process.env.RUNPOD_API_KEY},body:JSON.stringify({query,variables}),signal:controller.signal});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.errors?.length){
+      const msg=d.errors?.map(e=>e?.message).filter(Boolean).join("; ")||"RunPod API request failed";
+      const err=new Error(msg);err.providerStatus=r.status;throw err;
+    }
+    return d.data;
+  }catch(e){
+    if(e?.name==="AbortError")throw new Error("RunPod API timeout");
+    throw e;
+  }finally{clearTimeout(timeout)}
 }
 async function findGpuType(name){
   const data=await runpod(`query { gpuTypes { id displayName memoryInGb communityCloud secureCloud } }`,{});
@@ -57,6 +67,9 @@ async function findGpuType(name){
 }
 async function provisionJob(job,gpu){
   const gpuType=await findGpuType(gpu.name);
+  const primaryCloud=(process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY").toUpperCase();
+  const primaryAvailable=primaryCloud==="COMMUNITY"?gpuType.communityCloud:gpuType.secureCloud;
+  if(primaryAvailable===false)throw new Error("GPU is unavailable on the selected RunPod cloud tier");
   const terminateAfter=new Date(Date.now()+Number(job.requestedHours)*3600000).toISOString();
   const mutation=`mutation deploy($input: PodFindAndDeployOnDemandInput){podFindAndDeployOnDemand(input:$input){id name desiredStatus costPerHr imageName}}`;
   const input={
@@ -72,9 +85,21 @@ async function provisionJob(job,gpu){
     supportPublicIp:((process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY").toUpperCase()==="COMMUNITY"),
     computeType:"GPU"
   };
-  const data=await runpod(mutation,{input});
-  if(!data.podFindAndDeployOnDemand?.id)throw new Error("RunPod did not return a pod");
-  return data.podFindAndDeployOnDemand;
+  try{
+    const data=await runpod(mutation,{input});
+    if(!data.podFindAndDeployOnDemand?.id)throw new Error("RunPod did not return a pod");
+    return data.podFindAndDeployOnDemand;
+  }catch(firstError){
+    const fallback=(process.env.RUNPOD_FALLBACK_CLOUD_TYPE||"").toUpperCase();
+    const capacity=/no longer any instances available|no instances available|requested specifications|unavailable/i.test(String(firstError?.message||""));
+    if(!fallback||fallback===primaryCloud||!capacity)throw firstError;
+    const fallbackAvailable=fallback==="COMMUNITY"?gpuType.communityCloud:gpuType.secureCloud;
+    if(fallbackAvailable===false)throw firstError;
+    const fallbackInput={...input,cloudType:fallback};
+    const data=await runpod(mutation,{input:fallbackInput});
+    if(!data.podFindAndDeployOnDemand?.id)throw new Error("RunPod did not return a pod");
+    return data.podFindAndDeployOnDemand;
+  }
 }
 async function podInfo(id){
   const data=await runpod(`query pod($input:PodFilter){pod(input:$input){id name desiredStatus imageName costPerHr uptimeSeconds}}`,{input:{podId:id}});
@@ -82,6 +107,20 @@ async function podInfo(id){
 }
 async function terminatePod(id){
   return runpod(`mutation podTerminate($input:PodTerminateInput!){podTerminate(input:$input)}`,{input:{podId:id}});
+}
+async function reconcileStoppedJob(job){
+  if(!job||!["STOPPED","FAILED"].includes(job.status))return job;
+  const existing=await prisma.walletTransaction.findFirst({where:{jobId:job.id,type:"REFUND"}});
+  if(existing)return job;
+  const elapsed=job.startedAt?Math.max(0,(Date.now()-new Date(job.startedAt).getTime())/3600000):0;
+  const used=usd(Math.min(Number(job.requestedHours),elapsed)*Number(job.estimatedCostUsd)/Number(job.requestedHours));
+  const refund=usd(Math.max(0,Number(job.estimatedCostUsd)-used));
+  if(refund<=0)return job;
+  return prisma.$transaction(async tx=>{
+    const u=await tx.user.update({where:{id:job.userId},data:{balanceUsd:{increment:refund}}});
+    await tx.walletTransaction.create({data:{userId:job.userId,jobId:job.id,type:"REFUND",amountUsd:refund,balanceAfter:u.balanceUsd,reference:"reconcile-refund:"+job.id}});
+    return tx.job.update({where:{id:job.id},data:{status:"STOPPED"}});
+  });
 }
 
 app.post("/api/payments/razorpay/webhook",express.raw({type:"application/json"}),async(req,res)=>{
@@ -124,6 +163,9 @@ app.post("/api/payments/verify",auth,async(req,res)=>{
     if(!safeEqual(exp,b.razorpay_signature))return res.status(400).json({error:"Invalid payment signature"});
     const p=await prisma.payment.findFirst({where:{razorpayOrderId:b.razorpay_order_id,userId:req.user.id}});
     if(!p)return res.status(404).json({error:"Payment not found"});
+    const rp=new Razorpay({key_id:process.env.RAZORPAY_KEY_ID,key_secret:process.env.RAZORPAY_KEY_SECRET});
+    const remote=await rp.payments.fetch(b.razorpay_payment_id);
+    if(remote?.order_id!==p.razorpayOrderId||remote?.currency!=="INR"||Number(remote?.amount)!==Number(p.amountInr)*100||remote?.status!=="captured")return res.status(400).json({error:"Payment is not captured or does not match the order"});
     await creditPayment(b.razorpay_order_id,b.razorpay_payment_id);
     res.json({ok:true});
   }catch(e){console.error(e);res.status(400).json({error:"Payment verification failed"})}
@@ -152,9 +194,11 @@ app.post("/api/jobs",auth,async(req,res)=>{
       console.error("[RUNPOD_PROVISION_FAILED]", JSON.stringify({jobId:job.id,gpu:gpu.name,message:e?.message||String(e),stack:e?.stack||null}));
       try{await refundJob(job.id,e.message);}catch(refundError){console.error("[RUNPOD_REFUND_FAILED]", JSON.stringify({jobId:job.id,message:refundError?.message||String(refundError)}));}
       const msg=String(e?.message||"");
-      const unavailable=/no longer any instances available|no instances available|requested specifications/i.test(msg);
+      const unavailable=/no longer any instances available|no instances available|requested specifications|unavailable/i.test(msg);
       const billing=/insufficient|balance|payment|credit/i.test(msg);
-      return res.status(502).json({error:unavailable?"GPU is temporarily unavailable on the selected RunPod cloud tier. Your reserved wallet balance was restored.":billing?"The GPU provider requires available RunPod billing credit. Your reserved wallet balance was restored.":"GPU provisioning failed; your reserved wallet balance was restored."});
+      const authError=/unauthorized|forbidden|api key|authentication/i.test(msg);
+      const timeout=/timeout/i.test(msg);
+      return res.status(502).json({error:unavailable?"GPU is temporarily unavailable on the selected RunPod cloud tier. Your reserved wallet balance was restored.":billing?"The GPU provider requires available RunPod billing credit. Your reserved wallet balance was restored.":authError?"The GPU provider credentials are not accepted. Your reserved wallet balance was restored.":timeout?"The GPU provider timed out before the GPU could be confirmed. Your reserved wallet balance was restored.":"GPU provisioning failed; your reserved wallet balance was restored."});
     }
   }catch(e){
     if(e.message==="INSUFFICIENT")return res.status(402).json({error:"Insufficient balance. Add funds first."});
@@ -173,6 +217,7 @@ app.get("/api/jobs/:id",auth,async(req,res)=>{
         if(["RUNNING"].includes(p?.desiredStatus))status="RUNNING";
         else if(["TERMINATED","DEAD","EXITED"].includes(p?.desiredStatus))status="STOPPED";
         if(status!==job.status)await prisma.job.update({where:{id:job.id},data:{status,startedAt:status==="RUNNING"&&!job.startedAt?new Date():job.startedAt,stoppedAt:status==="STOPPED"?new Date():job.stoppedAt}});
+        if(status==="STOPPED")await reconcileStoppedJob({...job,status});
       }catch{}
     }
     return res.json(await prisma.job.findUnique({where:{id:job.id},include:{gpuProduct:true,transactions:true}}));
