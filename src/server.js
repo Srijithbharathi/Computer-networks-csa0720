@@ -69,7 +69,7 @@ async function provisionJob(job,gpu){
     volumeInGb:Number(process.env.RUNPOD_VOLUME_GB||0),
     volumeMountPath:process.env.RUNPOD_VOLUME_MOUNT||"/workspace",
     terminateAfter,
-    supportPublicIp:true,
+    supportPublicIp:((process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY").toUpperCase()==="COMMUNITY"),
     computeType:"GPU"
   };
   const data=await runpod(mutation,{input});
@@ -151,7 +151,10 @@ app.post("/api/jobs",auth,async(req,res)=>{
     }catch(e){
       console.error("[RUNPOD_PROVISION_FAILED]", JSON.stringify({jobId:job.id,gpu:gpu.name,message:e?.message||String(e),stack:e?.stack||null}));
       try{await refundJob(job.id,e.message);}catch(refundError){console.error("[RUNPOD_REFUND_FAILED]", JSON.stringify({jobId:job.id,message:refundError?.message||String(refundError)}));}
-      return res.status(502).json({error:"GPU provisioning failed; your reserved wallet balance was restored."});
+      const msg=String(e?.message||"");
+      const unavailable=/no longer any instances available|no instances available|requested specifications/i.test(msg);
+      const billing=/insufficient|balance|payment|credit/i.test(msg);
+      return res.status(502).json({error:unavailable?"GPU is temporarily unavailable on the selected RunPod cloud tier. Your reserved wallet balance was restored.":billing?"The GPU provider requires available RunPod billing credit. Your reserved wallet balance was restored.":"GPU provisioning failed; your reserved wallet balance was restored."});
     }
   }catch(e){
     if(e.message==="INSUFFICIENT")return res.status(402).json({error:"Insufficient balance. Add funds first."});
