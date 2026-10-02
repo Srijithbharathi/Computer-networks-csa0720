@@ -67,14 +67,14 @@ async function findGpuType(name){
 }
 async function provisionJob(job,gpu){
   const gpuType=await findGpuType(gpu.name);
-  const primaryCloud=(process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY").toUpperCase();
-  const primaryAvailable=primaryCloud==="COMMUNITY"?gpuType.communityCloud:gpuType.secureCloud;
-  if(primaryAvailable===false)throw new Error("GPU is unavailable on the selected RunPod cloud tier");
+  const requestedCloud=(process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY").toUpperCase();
+  const configuredFallbacks=String(process.env.RUNPOD_FALLBACK_CLOUD_TYPES||process.env.RUNPOD_FALLBACK_CLOUD_TYPE||"SECURE")
+    .split(",").map(x=>x.trim().toUpperCase()).filter(Boolean);
+  const cloudTypes=[requestedCloud,...configuredFallbacks.filter(x=>x!==requestedCloud)];
   const terminateAfter=new Date(Date.now()+Number(job.requestedHours)*3600000).toISOString();
-  const mutation=`mutation deploy($input: PodFindAndDeployOnDemandInput){podFindAndDeployOnDemand(input:$input){id name desiredStatus costPerHr imageName}}`;
-  const input={
+  const mutation=`mutation deploy(\$input: PodFindAndDeployOnDemandInput){podFindAndDeployOnDemand(input:\$input){id name desiredStatus costPerHr imageName}}`;
+  const baseInput={
     name:"acc-"+job.id,
-    cloudType:process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY",
     gpuTypeId:gpuType.id,
     gpuCount:1,
     imageName:process.env.RUNPOD_IMAGE_NAME||"runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04",
@@ -82,24 +82,28 @@ async function provisionJob(job,gpu){
     volumeInGb:Number(process.env.RUNPOD_VOLUME_GB||0),
     volumeMountPath:process.env.RUNPOD_VOLUME_MOUNT||"/workspace",
     terminateAfter,
-    supportPublicIp:((process.env.RUNPOD_CLOUD_TYPE||"COMMUNITY").toUpperCase()==="COMMUNITY"),
     computeType:"GPU"
   };
-  try{
-    const data=await runpod(mutation,{input});
-    if(!data.podFindAndDeployOnDemand?.id)throw new Error("RunPod did not return a pod");
-    return data.podFindAndDeployOnDemand;
-  }catch(firstError){
-    const fallback=(process.env.RUNPOD_FALLBACK_CLOUD_TYPE||"").toUpperCase();
-    const capacity=/no longer any instances available|no instances available|requested specifications|unavailable/i.test(String(firstError?.message||""));
-    if(!fallback||fallback===primaryCloud||!capacity)throw firstError;
-    const fallbackAvailable=fallback==="COMMUNITY"?gpuType.communityCloud:gpuType.secureCloud;
-    if(fallbackAvailable===false)throw firstError;
-    const fallbackInput={...input,cloudType:fallback};
-    const data=await runpod(mutation,{input:fallbackInput});
-    if(!data.podFindAndDeployOnDemand?.id)throw new Error("RunPod did not return a pod");
-    return data.podFindAndDeployOnDemand;
+  const capacityError=e=>/no longer any instances available|no instances available|requested specifications|unavailable|capacity/i.test(String(e?.message||""));
+  let lastError=null;
+  for(const cloudType of cloudTypes){
+    const available=cloudType==="COMMUNITY"?gpuType.communityCloud:cloudType==="SECURE"?gpuType.secureCloud:null;
+    if(available===false)continue;
+    const input={...baseInput,cloudType,supportPublicIp:cloudType==="COMMUNITY"};
+    for(let attempt=1;attempt<=2;attempt++){
+      try{
+        const data=await runpod(mutation,{input});
+        if(!data.podFindAndDeployOnDemand?.id)throw new Error("RunPod did not return a pod");
+        return data.podFindAndDeployOnDemand;
+      }catch(e){
+        lastError=e;
+        if(!capacityError(e) || attempt===2)break;
+        await new Promise(r=>setTimeout(r,500*attempt));
+      }
+    }
+    if(lastError && !capacityError(lastError))throw lastError;
   }
+  throw lastError||new Error("No RunPod capacity is currently available for the requested GPU");
 }
 async function podInfo(id){
   const data=await runpod(`query pod($input:PodFilter){pod(input:$input){id name desiredStatus imageName costPerHr uptimeSeconds}}`,{input:{podId:id}});
